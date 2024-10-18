@@ -61,14 +61,20 @@ void kernel_start(const char* command) {
     console_clear();
 
     // (re-)initialize kernel page table
-    for (uintptr_t addr = 0; addr < MEMSIZE_PHYSICAL; addr += PAGESIZE) {
+    vmiter it(kernel_pagetable, 0);
+    for (; it.va() < MEMSIZE_PHYSICAL; it += PAGESIZE) {
         int perm = PTE_P | PTE_W | PTE_U;
+        uintptr_t addr = it.va();
         if (addr == 0) {
             // nullptr is inaccessible even to the kernel
             perm = 0;
         }
+        // if 'addr' is a kernel address, remove PTE_U, unless it is the console address
+        if (addr < 0x100000 && addr != CONSOLE_ADDR) {
+            perm ^= PTE_U;
+        }
         // install identity mapping
-        int r = vmiter(kernel_pagetable, addr).try_map(addr, perm);
+        int r = it.try_map(addr, perm);
         assert(r == 0); // mappings during kernel_start MUST NOT fail
                         // (Note that later mappings might fail!!)
     }
@@ -205,6 +211,10 @@ void process_setup(pid_t pid, const char* program_name) {
 
     // mark process as runnable
     ptable[pid].state = P_RUNNABLE;
+
+    
+    //x86_64_pagetable* page = kalloc_pagetable();
+    
 }
 
 
@@ -338,6 +348,9 @@ uintptr_t syscall(regstate* regs) {
         schedule();             // does not return
 
     case SYSCALL_PAGE_ALLOC:
+        if (current->regs.reg_rdi % 4096 != 0 || current->regs.reg_rdi < PROC_START_ADDR || current->regs.reg_rdi >= MEMSIZE_VIRTUAL) {
+            return -1;
+        }
         return syscall_page_alloc(current->regs.reg_rdi);
 
     default:
